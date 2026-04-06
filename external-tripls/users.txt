@@ -1,0 +1,2 @@
+trip -1 trip -1 =trip /home/trip /bin/sh -
+tripd -1 trip -1 * - - -

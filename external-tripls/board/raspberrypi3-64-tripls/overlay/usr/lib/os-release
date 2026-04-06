@@ -1,0 +1,5 @@
+NAME=trip-ls
+VERSION=-1
+ID=trip-ls
+VERSION_ID=2026.02
+PRETTY_NAME="TRIP Resurgence Location Server 2026.02"
