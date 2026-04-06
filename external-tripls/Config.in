@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_tripls_PATH/package/tripd/Config.in"
