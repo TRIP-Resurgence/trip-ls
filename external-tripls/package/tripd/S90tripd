@@ -1,0 +1,74 @@
+#!/bin/sh
+#
+# tripd       Starts tripd.
+#
+
+DAEMON="tripd"
+PIDFILE="/var/run/$DAEMON.pid"
+
+# Make sure daemon program exists
+[ -f /usr/bin/$DAEMON ] || exit 0
+
+# Make sure there is a config
+[ -f /etc/tripd.conf ] || exit 0
+
+umask 077
+
+start() {
+        printf "Starting %s: " "$DAEMON"
+        start-stop-daemon --start --background --make-pidfile \
+                --pidfile "$PIDFILE" --exec "/usr/bin/$DAEMON"
+        status=$?
+        if [ "$status" -eq 0 ]; then
+                echo "OK"
+        else
+                echo "FAIL"
+        fi
+        return "$status"
+}
+
+stop() {
+        printf "Stopping %s: " "$DAEMON"
+        start-stop-daemon --stop --pidfile "$PIDFILE" \
+                --exec "/usr/bin/$DAEMON"
+        status=$?
+        if [ "$status" -eq 0 ]; then
+                echo "OK"
+        else
+                echo "FAIL"
+        fi
+        sleep 0.1
+        while start-stop-daemon --stop --test --quiet --pidfile "$PIDFILE" \
+                --exec "/usr/bin/$DAEMON"; do
+                sleep 0.1
+        done
+        rm -f "$PIDFILE"
+        return "$status"
+}
+
+restart() {
+        stop
+        start
+}
+
+case "$1" in
+        start)
+                start
+                ;;
+        stop)
+                stop
+                ;;
+        restart)
+                restart
+                ;;
+        reload)
+                # Restart, since there is no true "reload" feature.
+                restart
+                ;;
+        *)
+                echo "Usage: $0 {start|stop|restart}"
+                exit 1
+esac
+
+exit $?
+
