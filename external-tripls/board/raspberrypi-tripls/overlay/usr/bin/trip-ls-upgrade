@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# check arguments
+
+if [ ! $# -eq 1 ]; then
+	echo "usage: $0 <url>"
+	exit 1
+fi
+
+if [ -z "$1" ]; then
+	echo "usage: $0 <url>"
+	exit 1
+fi
+
+# parse url
+
+url=$1
+
+# issue upgrade
+
+echo "Issuing upgrade..."
+
+printf "$url" > /upgrade-url
+
+mount /dev/mmcblk0p1 /mnt
+sed -i '$ s-$- init=/bin/upgrader-' /mnt/cmdline.txt
+umount /mnt
+
+echo "Rebooting into upgrader..."
+
+reboot -f
+

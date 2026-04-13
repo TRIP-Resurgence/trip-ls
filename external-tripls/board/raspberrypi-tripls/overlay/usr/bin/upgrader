@@ -1,0 +1,237 @@
+#!/bin/sh
+
+# check arguments
+
+if [ "$1" != "stage2" ]; then
+	# =============== STAGE 1 =================
+	echo "================== Stage 1 ===================="
+
+	export PATH=/bin:/usr/bin:/sbin:/usr/sbin
+	echo "Mounting filesystems..."
+	mount -t proc proc /proc
+	mount -t sysfs sysfs /sys
+	mount -t devtmpfs devtmpfs /dev
+	mount -o remount,rw /
+	mount -t tmpfs tmpfs /tmp
+
+	# fetch upgrade issue url
+
+	if [ ! -f /upgrade-url ]; then
+		echo "No upgrade issued"
+		exec /bin/init
+	fi
+
+	url=$(cat /upgrade-url)
+
+	if [ -z "$url" ]; then
+		echo "Empty upgrade url"
+		exec /bin/init
+	fi
+
+	# parse url
+
+	proto="$(echo $url | grep :// | sed -e's,^\(.*://\).*,\1,g')"
+	uri="$(echo ${url/$proto/})"
+	user="$(echo $uri | grep @ | cut -d@ -f1)"
+	hostport="$(echo ${uri/$user@/} | cut -d/ -f1)"
+	host="$(echo $hostport | sed -e 's,:.*,,g')"
+	port="$(echo $hostport | sed -e 's,^.*:,:,g' -e 's,.*:\([0-9]*\).*,\1,g' -e 's,[^0-9],,g')"
+	path="$(echo $uri | grep / | cut -d/ -f2-)"
+
+	proto=$(echo $proto | cut -d":" -f1)
+	file="$(basename $path)"
+	savepath="/tmp/upgrade"
+
+	# download firmware package
+	
+
+	echo "Downloading $path via $proto from $host... "
+
+	case $proto in
+		ftp | http)
+			echo "Executing dhcp client..."
+			udhcpc
+			wget -O "$savepath" "$uri"
+			;;
+		tftp)
+			echo "Executing dhcp client..."
+			udhcpc
+			tftp -g -l "$savepath" -r "$path" $host $port
+			;;
+		file)
+			cp -f "$path" "$savepath"
+			;;
+		*)
+			echo "Unsupported protocol"
+			exec /bin/init
+	esac
+
+	if [ ! $? -eq 0 ]; then
+		echo "Download failed"
+		exec /bin/init
+	fi
+
+	echo ok
+
+	# ask user to validate checksum
+
+	echo "Computing checksum..."
+
+	sha256sum "$savepath"
+
+	read -p "Validate checksum against good source now (Y/N): " cksumgood
+
+	if [ ! "$cksumgood" == "Y" ]; then
+		echo "Download declared invalid - try again"
+		exec /bin/init
+	fi
+
+	# validate firmware package
+
+	echo "Validating firmware package... "
+
+	parts=$(fdisk -l "$savepath" | tail -n2)
+
+	if [ ! "$(echo "$parts" | wc -l)" -eq 2 ]; then
+		echo "Wrong number of partitions"
+		exec /bin/init
+	fi
+
+	part1=$(echo "$parts" | head -n1)
+	part2=$(echo "$parts" | tail -n1)
+	part1type=$(echo $part1 | cut -d" " -f 10)
+	part2type=$(echo $part2 | cut -d" " -f 9)
+
+	echo "$parts"
+
+	if [ ! "$part1type" == "Win95" ]; then
+		echo "Invalid boot partition type ($part1type)"
+		exec /bin/init
+	fi
+
+	if [ ! "$part2type" == "Linux" ]; then
+		echo "Invalid root partition type ($part2type)"
+		exec /bin/init
+	fi
+
+	rootlba=$(echo $part2 | cut -d" " -f 4)
+
+	rootpartextract=/tmp/testrootpart
+
+	dd if="$savepath" of=$rootpartextract bs=512 skip=$rootlba
+	mount -o ro $rootpartextract /mnt
+
+	if [ ! $? -eq 0 ]; then
+		echo "Root partition is not ext4"
+		exec /bin/init
+	fi
+
+	osreleasepath=/mnt/etc/os-release
+
+	if [ ! -f $osreleasepath ]; then
+		echo "Root partition does not contain os-release"
+		exec /bin/init
+	fi
+
+	osname=$(head -n1 $osreleasepath)
+
+	if [ ! "$osname" == "NAME=trip-ls" ]; then
+		echo "This is not a TRIP Resurgence Location Server firmware package"
+		exec /bin/init
+	fi
+
+	umount /mnt
+	rm /tmp/testrootpart
+
+	echo ok
+
+	read -p "Proceed with firmware upgrade (Y/N): " proceed
+
+	if [ ! "$proceed" == "Y" ]; then
+		exec /bin/init
+	fi
+
+	# chroot to ramdisk and unmount root
+
+	mkdir -p /tmp/etc /tmp/usr/bin /tmp/usr/lib /tmp/proc /tmp/sys /tmp/dev /tmp/run /tmp/oldroot
+	ln -s lib /tmp/lib64
+	ln -s usr/lib /tmp/lib
+	ln -s usr/bin /tmp/bin
+	cp /usr/bin/* /tmp/bin
+	cp /usr/lib/* /tmp/lib
+	cp -r /etc /tmp
+	cp "$0" /tmp
+	mount -o move /proc /tmp/proc
+	mount -o move /sys /tmp/sys
+	mount -o move /dev /tmp/dev
+	mount -o move /run /tmp/run
+	pivot_root /tmp /tmp/oldroot
+	cd /
+	exec chroot . /bin/bash "$0" stage2
+fi
+
+# ============================ STAGE 2 ================================
+
+savepath=/upgrade
+
+echo "================== Stage 2 ===================="
+echo "Killing processes and unmounting root device..."
+
+for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+	if [ "$pid" != "$$" ]; then
+		if readlink "/proc/$pid/root" 2>/dev/null | grep -q oldroot; then
+			kill -TERM "$pid" 2>/dev/null || true
+			echo "Terminated $pid"
+		fi
+	fi
+done
+
+sleep 1
+
+for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+	if [ "$pid" != "$$" ]; then
+		if readlink "/proc/$pid/root" 2>/dev/null | grep -q oldroot; then
+			kill -KILL "$pid" 2>/dev/null || true
+			echo "Killed $pid"
+		fi
+	fi
+done
+
+sleep 1
+
+for pid in /proc/[0-9]*; do
+	if grep -q oldroot "$pid/maps" 2>/dev/null; then
+		kill -KILL "${pid##*/}" 2>/dev/null || true
+		echo "Killed $pid"
+	fi
+done
+
+sleep 1
+
+if lsof 2>/dev/null | cut -d'	' -f4 | grep -q oldroot; then
+	echo "oldroot still in use - cannot unmount"
+	exec /bin/init
+fi
+
+umount /oldroot
+
+echo ok
+
+echo "FLASHING FIRMWARE PACKAGE - DO NOT TURN OFF THE LOCATION SERVER... "
+
+#dd if="$savepath" of=/dev/mmcblk0 bs=512 status=progress
+echo "(dd) if=\"$savepath\" of=/dev/mmcblk0 bs=512 status=progress"
+
+if [ ! $? -eq 0 ]; then
+	echo "FLASHING FAILED - This most likely bricked this location server."
+	echo "We are sorry for the inconvenience. To unbrick, please take out the SD card and write the firmware package manually."
+	exit 1
+fi
+
+# at this point, boot cmdline has normal init and root does not have issued upgrades, we can reboot
+
+echo "Flashing succeded. Rebooting now..."
+#reboot -f
+echo "(reboot) -f"
+exit 0
+
