@@ -90,7 +90,7 @@ if [ "$1" != "stage2" ]; then
 
 	echo "Validating firmware package... "
 
-	parts=$(fdisk -l "$savepath" | tail -n2)
+	parts=$(fdisk -l "$savepath" | grep "^$savepath[12]")
 
 	if [ ! "$(echo "$parts" | wc -l)" -eq 2 ]; then
 		echo "Wrong number of partitions"
@@ -99,18 +99,19 @@ if [ "$1" != "stage2" ]; then
 
 	part1=$(echo "$parts" | head -n1)
 	part2=$(echo "$parts" | tail -n1)
-	part1type=$(echo $part1 | cut -d" " -f 10)
-	part2type=$(echo $part2 | cut -d" " -f 9)
+	part1code=$(echo "$part1" | awk '{print $9}')
+	part2code=$(echo "$part2" | awk '{print $8}')
 
-	echo "$parts"
+	echo "$part1"
+	echo "$part2"
 
-	if [ ! "$part1type" == "Win95" ]; then
-		echo "Invalid boot partition type ($part1type)"
+	if [ "$part1code" != "c" ]; then
+		echo "Invalid boot partition code ($part1code)"
 		exec /bin/init
 	fi
 
-	if [ ! "$part2type" == "Linux" ]; then
-		echo "Invalid root partition type ($part2type)"
+	if [ "$part2code" != "83" ]; then
+		echo "Invalid root partition code ($part2code)"
 		exec /bin/init
 	fi
 
@@ -219,19 +220,19 @@ echo ok
 
 echo "FLASHING FIRMWARE PACKAGE - DO NOT TURN OFF THE LOCATION SERVER... "
 
-#dd if="$savepath" of=/dev/mmcblk0 bs=512 status=progress
-echo "(dd) if=\"$savepath\" of=/dev/mmcblk0 bs=512 status=progress"
+dd if="$savepath" of=/dev/mmcblk0 bs=512
 
 if [ ! $? -eq 0 ]; then
 	echo "FLASHING FAILED - This most likely bricked this location server."
 	echo "We are sorry for the inconvenience. To unbrick, please take out the SD card and write the firmware package manually."
+	exec /bin/init
 	exit 1
 fi
 
 # at this point, boot cmdline has normal init and root does not have issued upgrades, we can reboot
 
 echo "Flashing succeded. Rebooting now..."
-#reboot -f
-echo "(reboot) -f"
-exit 0
+reboot -f
+exec /bin/init
+exit 1
 
